@@ -138,3 +138,5 @@ Thumbs.db
 logs/
 data/
 models/
+
+.claude
