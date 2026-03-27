@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摄像头预览 - AI 图像分析</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            color: #fff;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        .status-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px 20px;
+            border-radius: 20px;
+            color: #fff;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #666;
+        }
+        
+        .status-dot.active {
+            background: #28a745;
+            box-shadow: 0 0 10px #28a745;
+        }
+        
+        .status-dot.loading {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            margin-bottom: 30px;
+        }
+        
+        #videoFeed {
+            max-width: 100%;
+            max-height: 70vh;
+            display: block;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .btn {
+            padding: 15px 35px;
+            font-size: 16px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(17, 153, 142, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(235, 51, 73, 0.4);
+        }
+        
+        .btn:active {
+            transform: scale(0.98);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .message {
+            padding: 15px 25px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-size: 16px;
+            display: none;
+        }
+        
+        .message.success {
+            background: rgba(40, 167, 69, 0.2);
+            color: #28a745;
+            border: 1px solid rgba(40, 167, 69, 0.3);
+        }
+        
+        .message.error {
+            background: rgba(220, 53, 69, 0.2);
+            color: #dc3545;
+            border: 1px solid rgba(220, 53, 69, 0.3);
+        }
+        
+        .message.info {
+            background: rgba(23, 162, 184, 0.2);
+            color: #17a2b8;
+            border: 1px solid rgba(23, 162, 184, 0.3);
+        }
+        
+        .result-panel {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 800px;
+            width: 100%;
+            display: none;
+        }
+        
+        .result-panel h3 {
+            color: #fff;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+        
+        .result-content {
+            color: #ddd;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .result-content h1,
+        .result-content h2,
+        .result-content h3,
+        .result-content h4 {
+            color: #fff;
+            margin: 1em 0 0.5em 0;
+        }
+        
+        .result-content p {
+            margin: 0.8em 0;
+        }
+        
+        .result-content ul,
+        .result-content ol {
+            margin: 0.8em 0;
+            padding-left: 2em;
+        }
+        
+        .result-content code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+        }
+        
+        .result-content pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+        
+        .result-content pre code {
+            background: transparent;
+            padding: 0;
+        }
+        
+        .result-content blockquote {
+            border-left: 3px solid #667eea;
+            padding-left: 15px;
+            margin: 10px 0;
+            color: #aaa;
+        }
+        
+        .result-content strong {
+            color: #fff;
+            font-weight: 600;
+        }
+        
+        .result-content em {
+            color: #ccc;
+        }
+        
+        .result-content a {
+            color: #667eea;
+            text-decoration: underline;
+        }
+        
+        .tips {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: #fff;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>📷 摄像头实时预览</h1>
+    </header>
+    
+    <div class="status-bar">
+        <div class="status-item">
+            <div class="status-dot" id="cameraDot"></div>
+            <span>摄像头：<span id="cameraStatus">未连接</span></span>
+        </div>
+        <div class="status-item">
+            <div class="status-dot" id="aiDot"></div>
+            <span>AI 服务：<span id="aiStatus">检测中</span></span>
+        </div>
+    </div>
+    
+    <div class="video-container">
+        <img id="videoFeed" src="" alt="摄像头画面">
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loadingText">正在初始化摄像头...</div>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button class="btn btn-primary" id="startBtn" onclick="startCamera()">
+            ▶️ 启动摄像头
+        </button>
+        <button class="btn btn-success" id="captureBtn" onclick="capturePhoto()" disabled>
+            📸 拍照
+        </button>
+        <button class="btn btn-primary" id="analyzeBtn" onclick="captureAndAnalyze()" disabled>
+            🔬 拍照并分析
+        </button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopCamera()" disabled>
+            ⏹️ 停止
+        </button>
+    </div>
+    
+    <div class="message" id="message"></div>
+    
+    <div class="result-panel" id="resultPanel">
+        <h3>🔬 AI 分析结果</h3>
+        <div class="result-content" id="resultContent"></div>
+    </div>
+    
+    <p class="tips">💡 按空格键快速拍照 | 图片保存在 data/pic/ 目录</p>
+    
+    <script>
+        const API_BASE = '';
+        let isCameraRunning = false;
+        let isAnalyzing = false;
+        
+        // 页面加载时自动初始化摄像头
+        window.addEventListener('DOMContentLoaded', async () => {
+            showMessage('正在连接服务器...', 'info');
+            await checkServerStatus();
+            await startCamera();
+        });
+        
+        // 检查服务器状态
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                const aiReady = data.ai_service_ready;
+                document.getElementById('aiDot').className = `status-dot ${aiReady ? 'active' : ''}`;
+                document.getElementById('aiStatus').textContent = aiReady ? '就绪' : '未就绪';
+            } catch (error) {
+                document.getElementById('aiDot').className = 'status-dot';
+                document.getElementById('aiStatus').textContent = '连接失败';
+            }
+        }
+        
+        // 启动摄像头
+        async function startCamera() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingText = document.getElementById('loadingText');
+            
+            loadingOverlay.style.display = 'flex';
+            loadingText.textContent = '正在启动摄像头...';
+            
+            try {
+                // 先检查状态
+                const statusResponse = await fetch(`${API_BASE}/camera/status`);
+                const status = await statusResponse.json();
+                
+                if (!status.is_running) {
+                    // 摄像头未运行，启动它
+                    const startResponse = await fetch(`${API_BASE}/camera/start`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const startData = await startResponse.json();
+                    
+                    if (!startData.success) {
+                        throw new Error(startData.error || '启动失败');
+                    }
+                }
+                
+                // 等待摄像头就绪
+                await waitForCameraReady();
+                
+                // 设置视频流
+                const videoFeed = document.getElementById('videoFeed');
+                videoFeed.src = `${API_BASE}/video_feed?t=${Date.now()}`;
+                
+                isCameraRunning = true;
+                updateUIState(true);
+                showMessage('摄像头已启动', 'success');
+                hideMessage();
+            } catch (error) {
+                showMessage(`启动失败：${error.message}`, 'error');
+                updateUIState(false);
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // 等待摄像头就绪
+        async function waitForCameraReady(maxAttempts = 30) {
+            for (let i = 0; i < maxAttempts; i++) {
+                const response = await fetch(`${API_BASE}/camera/status`);
+                const status = await response.json();
+                
+                if (status.is_running && status.has_frame) {
+                    return true;
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            throw new Error('摄像头就绪超时');
+        }
+        
+        // 停止摄像头
+        async function stopCamera() {
+            try {
+                await fetch(`${API_BASE}/camera/stop`, { method: 'POST' });
+                
+                const videoFeed = document.getElementById('videoFeed');
+                videoFeed.src = '';
+                
+                isCameraRunning = false;
+                updateUIState(false);
+                showMessage('摄像头已停止', 'info');
+            } catch (error) {
+                showMessage(`停止失败：${error.message}`, 'error');
+            }
+        }
+        
+        // 拍照
+        async function capturePhoto() {
+            const messageEl = document.getElementById('message');
+            messageEl.className = 'message info';
+            messageEl.textContent = '正在拍照...';
+            messageEl.style.display = 'block';
+            
+            try {
+                const response = await fetch(`${API_BASE}/camera/capture`, { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    messageEl.className = 'message success';
+                    messageEl.innerHTML = `✓ 已保存：<a href="${API_BASE}${data.url}" target="_blank" style="color: #28a745; text-decoration: underline;">${data.filename}</a>`;
+                } else {
+                    messageEl.className = 'message error';
+                    messageEl.textContent = `✗ 失败：${data.error}`;
+                }
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = '✗ 请求失败';
+            }
+        }
+        
+        // 拍照并分析
+        async function captureAndAnalyze() {
+            if (isAnalyzing) return;
+            
+            const messageEl = document.getElementById('message');
+            const resultPanel = document.getElementById('resultPanel');
+            
+            isAnalyzing = true;
+            messageEl.className = 'message info';
+            messageEl.textContent = '正在拍照并分析...';
+            messageEl.style.display = 'block';
+            resultPanel.style.display = 'none';
+            
+            try {
+                // 拍照
+                const captureResponse = await fetch(`${API_BASE}/camera/capture`, { method: 'POST' });
+                const captureData = await captureResponse.json();
+                
+                if (!captureData.success) {
+                    throw new Error(captureData.error || '拍照失败');
+                }
+                
+                messageEl.textContent = '正在 AI 分析...';
+                
+                // 分析
+                const analyzeResponse = await fetch(`${API_BASE}/analyze/image`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: captureData.path })
+                });
+                const analyzeData = await analyzeResponse.json();
+                
+                if (analyzeData.success) {
+                    messageEl.className = 'message success';
+                    messageEl.innerHTML = `✓ 分析完成：<a href="${API_BASE}${captureData.url}" target="_blank" style="color: #28a745; text-decoration: underline;">${captureData.filename}</a>`;
+
+                    // 使用 marked 解析 Markdown
+                    document.getElementById('resultContent').innerHTML = marked.parse(analyzeData.analysis);
+                    resultPanel.style.display = 'block';
+                } else {
+                    throw new Error(analyzeData.error || '分析失败');
+                }
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = `✗ ${error.message}`;
+            } finally {
+                isAnalyzing = false;
+            }
+        }
+        
+        // 更新 UI 状态
+        function updateUIState(running) {
+            const startBtn = document.getElementById('startBtn');
+            const captureBtn = document.getElementById('captureBtn');
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const cameraDot = document.getElementById('cameraDot');
+            const cameraStatus = document.getElementById('cameraStatus');
+            
+            if (running) {
+                startBtn.disabled = true;
+                captureBtn.disabled = false;
+                analyzeBtn.disabled = false;
+                stopBtn.disabled = false;
+                cameraDot.className = 'status-dot active';
+                cameraStatus.textContent = '运行中';
+            } else {
+                startBtn.disabled = false;
+                captureBtn.disabled = true;
+                analyzeBtn.disabled = true;
+                stopBtn.disabled = true;
+                cameraDot.className = 'status-dot';
+                cameraStatus.textContent = '未连接';
+            }
+        }
+        
+        // 显示消息
+        function showMessage(text, type = 'info') {
+            const messageEl = document.getElementById('message');
+            messageEl.className = `message ${type}`;
+            messageEl.textContent = text;
+            messageEl.style.display = 'block';
+        }
+        
+        // 隐藏消息
+        function hideMessage() {
+            setTimeout(() => {
+                const messageEl = document.getElementById('message');
+                messageEl.style.display = 'none';
+            }, 3000);
+        }
+        
+        // 空格键拍照
+        document.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' && isCameraRunning) {
+                e.preventDefault();
+                capturePhoto();
+            }
+        });
+    </script>
+</body>
+</html>

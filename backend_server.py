@@ -247,7 +247,11 @@ class BackendServer:
             if self.camera.is_running:
                 return jsonify({"success": True, "message": "摄像头已在运行"})
 
-            data = request.get_json() or {}
+            try:
+                data = request.get_json(silent=True) or {}
+            except Exception:
+                data = {}
+            
             config = CameraConfig(
                 camera_index=data.get('camera_index', 0),
                 width=data.get('width', 1920),
@@ -336,180 +340,9 @@ class BackendServer:
         # ===== 网页预览 =====
         @self.app.route('/preview')
         def preview_page():
-            """预览页面"""
-            return '''
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>摄像头预览</title>
-                <meta charset="utf-8">
-                <style>
-                    body {
-                        margin: 0;
-                        padding: 20px;
-                        background: #1a1a1a;
-                        display: flex;
-                        flex-direction: column;
-                        justify-content: center;
-                        align-items: center;
-                        min-height: 100vh;
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                    }
-                    .container {
-                        text-align: center;
-                    }
-                    h1 {
-                        color: #fff;
-                        margin-bottom: 20px;
-                    }
-                    .video-container {
-                        position: relative;
-                        display: inline-block;
-                        background: #000;
-                        border-radius: 8px;
-                        overflow: hidden;
-                    }
-                    img {
-                        max-width: 100%;
-                        max-height: 70vh;
-                        display: block;
-                    }
-                    .btn-group {
-                        margin-top: 20px;
-                        display: flex;
-                        gap: 15px;
-                        justify-content: center;
-                    }
-                    .btn {
-                        padding: 15px 40px;
-                        font-size: 18px;
-                        border: none;
-                        border-radius: 8px;
-                        cursor: pointer;
-                        transition: all 0.2s;
-                    }
-                    .btn-capture {
-                        background: #007bff;
-                        color: white;
-                    }
-                    .btn-capture:hover {
-                        background: #0056b3;
-                    }
-                    .btn-analyze {
-                        background: #28a745;
-                        color: white;
-                    }
-                    .btn-analyze:hover {
-                        background: #1e7e34;
-                    }
-                    .btn:active {
-                        transform: scale(0.98);
-                    }
-                    .status {
-                        color: #28a745;
-                        margin-top: 15px;
-                        font-size: 16px;
-                        min-height: 24px;
-                    }
-                    .result {
-                        margin-top: 20px;
-                        padding: 20px;
-                        background: #2a2a2a;
-                        border-radius: 8px;
-                        max-width: 800px;
-                        color: #ddd;
-                        text-align: left;
-                        white-space: pre-wrap;
-                        max-height: 300px;
-                        overflow-y: auto;
-                    }
-                    .tips {
-                        color: #888;
-                        margin-top: 15px;
-                        font-size: 14px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>📷 摄像头实时预览</h1>
-                    <div class="video-container">
-                        <img src="/video_feed" alt="摄像头画面">
-                    </div>
-                    <div class="btn-group">
-                        <button class="btn btn-capture" onclick="capturePhoto()">📸 拍照</button>
-                        <button class="btn btn-analyze" onclick="captureAndAnalyze()">🔬 拍照并分析</button>
-                    </div>
-                    <p class="status" id="status"></p>
-                    <div class="result" id="result" style="display: none;"></div>
-                    <p class="tips">按空格键拍照 | 图片保存在 data/pic/ 目录</p>
-                </div>
-                <script>
-                    function capturePhoto() {
-                        document.getElementById('status').textContent = '正在拍照...';
-                        fetch('/camera/capture', {method: 'POST'})
-                            .then(r => r.json())
-                            .then(data => {
-                                if (data.success) {
-                                    document.getElementById('status').innerHTML =
-                                        '✓ 已保存：<a href="' + data.url + '" target="_blank" style="color: #28a745;">' +
-                                        data.filename + '</a>';
-                                } else {
-                                    document.getElementById('status').textContent = '✗ 失败：' + data.error;
-                                }
-                            })
-                            .catch(err => {
-                                document.getElementById('status').textContent = '✗ 请求失败';
-                            });
-                    }
-
-                    function captureAndAnalyze() {
-                        document.getElementById('status').textContent = '正在拍照并分析...';
-                        document.getElementById('result').style.display = 'none';
-
-                        fetch('/camera/capture', {method: 'POST'})
-                            .then(r => r.json())
-                            .then(data => {
-                                if (data.success) {
-                                    document.getElementById('status').textContent = '正在 AI 分析...';
-                                    // 调用分析接口
-                                    fetch('/analyze/image', {
-                                        method: 'POST',
-                                        headers: {'Content-Type': 'application/json'},
-                                        body: JSON.stringify({path: data.path})
-                                    })
-                                    .then(r => r.json())
-                                    .then(analysis => {
-                                        if (analysis.success) {
-                                            document.getElementById('status').innerHTML =
-                                                '✓ 分析完成：<a href="' + data.url + '" target="_blank" style="color: #28a745;">' +
-                                                data.filename + '</a>';
-                                            document.getElementById('result').textContent = analysis.analysis;
-                                            document.getElementById('result').style.display = 'block';
-                                        } else {
-                                            document.getElementById('status').textContent = '✗ 分析失败：' + analysis.error;
-                                        }
-                                    });
-                                } else {
-                                    document.getElementById('status').textContent = '✗ 拍照失败：' + data.error;
-                                }
-                            })
-                            .catch(err => {
-                                document.getElementById('status').textContent = '✗ 请求失败';
-                            });
-                    }
-
-                    // 空格键拍照
-                    document.addEventListener('keydown', function(e) {
-                        if (e.code === 'Space') {
-                            e.preventDefault();
-                            capturePhoto();
-                        }
-                    });
-                </script>
-            </body>
-            </html>
-            '''
+            """预览页面 - 提供独立前端页面"""
+            frontend_dir = Path(__file__).parent / "frontend"
+            return send_from_directory(frontend_dir, "preview.html")
 
         # ===== AI 分析 =====
         @self.app.route('/analyze/image', methods=['POST'])

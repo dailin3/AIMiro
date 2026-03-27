@@ -431,6 +431,10 @@ class AIImageAnalyzer:
         return result
 
 
+
+
+
+
 def main():
     """命令行入口点"""
     import argparse
