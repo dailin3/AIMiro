@@ -146,6 +146,33 @@
             cursor: not-allowed;
         }
         
+        .camera-select {
+            padding: 12px 20px;
+            font-size: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.3s;
+            min-width: 200px;
+        }
+        
+        .camera-select:hover {
+            border-color: rgba(255, 255, 255, 0.4);
+        }
+        
+        .camera-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        .camera-select option {
+            background: #1a1a2e;
+            color: #fff;
+        }
+        
         .message {
             padding: 15px 25px;
             border-radius: 12px;
@@ -317,7 +344,13 @@
             <div class="loading-text" id="loadingText">正在初始化摄像头...</div>
         </div>
     </div>
-    
+
+    <div class="controls">
+        <select id="cameraSelect" class="camera-select" onchange="onCameraChange()">
+            <option value="">选择摄像头...</option>
+        </select>
+    </div>
+
     <div class="controls">
         <button class="btn btn-primary" id="startBtn" onclick="startCamera()">
             ▶️ 启动摄像头
@@ -346,13 +379,124 @@
         const API_BASE = '';
         let isCameraRunning = false;
         let isAnalyzing = false;
-        
-        // 页面加载时自动初始化摄像头
+        let selectedCameraIndex = 0;
+        let availableCameras = [];
+
+        // 页面加载时：先获取摄像头列表，然后启动默认摄像头
         window.addEventListener('DOMContentLoaded', async () => {
             showMessage('正在连接服务器...', 'info');
             await checkServerStatus();
-            await startCamera();
+            await loadCameraDevices();
+            // 启动第一个可用的摄像头
+            if (availableCameras.length > 0) {
+                selectedCameraIndex = availableCameras[0].index;
+                document.getElementById('cameraSelect').value = selectedCameraIndex;
+                await startCamera();
+            }
         });
+
+        // 加载摄像头设备列表
+        async function loadCameraDevices() {
+            try {
+                const response = await fetch(`${API_BASE}/camera/devices`);
+                const data = await response.json();
+                
+                availableCameras = data.devices || [];
+                const select = document.getElementById('cameraSelect');
+                
+                // 清空选项
+                select.innerHTML = '';
+                
+                if (availableCameras.length === 0) {
+                    select.innerHTML = '<option value="0">未检测到摄像头</option>';
+                    select.disabled = true;
+                    showMessage('未检测到可用摄像头', 'error');
+                    return;
+                }
+                
+                // 添加摄像头选项
+                availableCameras.forEach((camera) => {
+                    const option = document.createElement('option');
+                    option.value = camera.index;
+                    option.textContent = `${camera.name} (${camera.width}x${camera.height})`;
+                    select.appendChild(option);
+                });
+                
+                select.disabled = false;
+            } catch (error) {
+                console.error('加载摄像头列表失败:', error);
+                const select = document.getElementById('cameraSelect');
+                select.innerHTML = '<option value="0">摄像头 0</option>';
+                select.disabled = false;
+            }
+        }
+
+        // 摄像头选择变化 - 切换到选中的摄像头
+        function onCameraChange() {
+            const select = document.getElementById('cameraSelect');
+            const newIndex = parseInt(select.value);
+            
+            if (newIndex === selectedCameraIndex) {
+                return; // 没有变化
+            }
+            
+            selectedCameraIndex = newIndex;
+            restartCamera();
+        }
+        
+        // 重启摄像头 - 先停止再启动
+        async function restartCamera() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingText = document.getElementById('loadingText');
+            
+            loadingOverlay.style.display = 'flex';
+            loadingText.textContent = '正在切换摄像头...';
+            
+            try {
+                // 停止当前摄像头
+                await fetch(`${API_BASE}/camera/stop`, { method: 'POST' });
+                isCameraRunning = false;
+                updateUIState(false);
+                
+                // 等待摄像头资源释放
+                await new Promise(resolve => setTimeout(resolve, 800));
+                
+                // 启动新摄像头
+                await startCameraWithIndex(selectedCameraIndex);
+                
+                showMessage(`已切换到摄像头 ${selectedCameraIndex}`, 'success');
+            } catch (error) {
+                showMessage(`切换失败：${error.message}`, 'error');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // 用指定索引启动摄像头
+        async function startCameraWithIndex(cameraIndex) {
+            const startResponse = await fetch(`${API_BASE}/camera/start`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    camera_index: cameraIndex
+                })
+            });
+            const startData = await startResponse.json();
+            
+            if (!startData.success) {
+                throw new Error(startData.error || '启动失败');
+            }
+            
+            // 等待摄像头就绪
+            await waitForCameraReady();
+            
+            // 更新视频流
+            const videoFeed = document.getElementById('videoFeed');
+            videoFeed.src = `${API_BASE}/video_feed?t=${Date.now()}`;
+            
+            isCameraRunning = true;
+            updateUIState(true);
+        }
         
         // 检查服务器状态
         async function checkServerStatus() {
@@ -369,42 +513,16 @@
             }
         }
         
-        // 启动摄像头
+        // 启动摄像头（使用当前选中的索引）
         async function startCamera() {
             const loadingOverlay = document.getElementById('loadingOverlay');
             const loadingText = document.getElementById('loadingText');
-            
+
             loadingOverlay.style.display = 'flex';
             loadingText.textContent = '正在启动摄像头...';
-            
+
             try {
-                // 先检查状态
-                const statusResponse = await fetch(`${API_BASE}/camera/status`);
-                const status = await statusResponse.json();
-                
-                if (!status.is_running) {
-                    // 摄像头未运行，启动它
-                    const startResponse = await fetch(`${API_BASE}/camera/start`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({})
-                    });
-                    const startData = await startResponse.json();
-                    
-                    if (!startData.success) {
-                        throw new Error(startData.error || '启动失败');
-                    }
-                }
-                
-                // 等待摄像头就绪
-                await waitForCameraReady();
-                
-                // 设置视频流
-                const videoFeed = document.getElementById('videoFeed');
-                videoFeed.src = `${API_BASE}/video_feed?t=${Date.now()}`;
-                
-                isCameraRunning = true;
-                updateUIState(true);
+                await startCameraWithIndex(selectedCameraIndex);
                 showMessage('摄像头已启动', 'success');
                 hideMessage();
             } catch (error) {

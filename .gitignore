@@ -140,3 +140,5 @@ data/
 models/
 
 .claude
+
+test_data/

@@ -5,26 +5,26 @@
 提供 RESTful API 服务，协调摄像头采集与 AI 分析功能。
 """
 
-import os
 import sys
-import json
 import time
 import signal
-import base64
 import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 # 导入相机模块
-from camera_capture import CameraCapture, CameraConfig
+from backend.camera_capture import CameraCapture, CameraConfig
 
 # 导入 AI 分析模块
-from ai_image_analysis import AIImageAnalyzer, AnalysisConfig, load_env_file
+from backend.ai_image_analysis import AIImageAnalyzer, AnalysisConfig, load_env_file
+
+# 导入人脸识别模块
+from backend.face_recognition_module import FaceRecognizerService, FaceRecognitionConfig
 
 # 加载 .env 配置
 load_env_file()
@@ -201,6 +201,118 @@ class AIService:
         return sorted_results[:limit]
 
 
+class FaceService:
+    """人脸识别服务"""
+
+    def __init__(self):
+        self.recognizer: Optional[FaceRecognizerService] = None
+        self._init_recognizer()
+
+    def _init_recognizer(self) -> None:
+        """初始化识别器"""
+        try:
+            config = FaceRecognitionConfig()
+            self.recognizer = FaceRecognizerService(config)
+        except Exception as e:
+            print(f"初始化人脸识别器失败：{e}")
+
+    def register_face(self, image_path: Path, face_id: str, name: Optional[str] = None, 
+                      face_index: int = 0) -> Dict[str, Any]:
+        """注册人脸"""
+        if self.recognizer is None:
+            return {"success": False, "error": "人脸识别器未初始化"}
+
+        import cv2
+        image = cv2.imread(str(image_path))
+        if image is None:
+            return {"success": False, "error": "图像文件读取失败"}
+
+        result = self.recognizer.register_face(image, face_id, name, face_index)
+        if result:
+            return {
+                "success": True,
+                "face_id": result.face_id,
+                "name": result.name,
+                "location": result.location
+            }
+        else:
+            return {"success": False, "error": "人脸注册失败"}
+
+    def recognize_faces(self, image_path: Path) -> Dict[str, Any]:
+        """识别人脸"""
+        if self.recognizer is None:
+            return {"success": False, "error": "人脸识别器未初始化"}
+
+        import cv2
+        image = cv2.imread(str(image_path))
+        if image is None:
+            return {"success": False, "error": "图像文件读取失败"}
+
+        results = self.recognizer.recognize_faces(image)
+        return {
+            "success": True,
+            "face_count": len(results),
+            "faces": results
+        }
+
+    def compare_faces(self, image_path1: Path, image_path2: Path) -> Dict[str, Any]:
+        """比对两张图片中的人脸"""
+        if self.recognizer is None:
+            return {"success": False, "error": "人脸识别器未初始化"}
+
+        import cv2
+        image1 = cv2.imread(str(image_path1))
+        image2 = cv2.imread(str(image_path2))
+        
+        if image1 is None or image2 is None:
+            return {"success": False, "error": "图像文件读取失败"}
+
+        # 提取两张图片的人脸特征
+        rgb_image1 = cv2.cvtColor(image1, cv2.COLOR_BGR2RGB)
+        rgb_image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2RGB)
+
+        encodings1 = self.recognizer.extract_face_encodings(rgb_image1)
+        encodings2 = self.recognizer.extract_face_encodings(rgb_image2)
+
+        if len(encodings1) == 0 or len(encodings2) == 0:
+            return {"success": False, "error": "未在图片中检测到人脸"}
+
+        # 比对第一张人脸（如果有更多人脸，可以扩展逻辑）
+        is_match, similarity = self.recognizer.compare_faces(encodings1[0], encodings2[0])
+        
+        return {
+            "success": True,
+            "is_match": is_match,
+            "similarity": round(similarity, 4),
+            "face_count_image1": len(encodings1),
+            "face_count_image2": len(encodings2)
+        }
+
+    def get_face_list(self) -> List[Dict]:
+        """获取人脸列表"""
+        if self.recognizer is None:
+            return []
+        return self.recognizer.get_face_list()
+
+    def delete_face(self, face_id: str) -> bool:
+        """删除人脸"""
+        if self.recognizer is None:
+            return False
+        return self.recognizer.delete_face(face_id)
+
+    def clear_all_faces(self) -> bool:
+        """清空所有人脸"""
+        if self.recognizer is None:
+            return False
+        return self.recognizer.clear_all_faces()
+
+    def update_face_name(self, face_id: str, new_name: str) -> bool:
+        """更新人脸名称"""
+        if self.recognizer is None:
+            return False
+        return self.recognizer.update_face_name(face_id, new_name)
+
+
 class BackendServer:
     """后端服务器"""
 
@@ -212,6 +324,7 @@ class BackendServer:
         # 初始化服务
         self.camera = CameraManager(data_dir=self.config.data_dir)
         self.ai_service = AIService()
+        self.face_service = FaceService()
 
         # 注册路由
         self._register_routes()
@@ -244,20 +357,30 @@ class BackendServer:
         @self.app.route('/camera/start', methods=['POST'])
         def camera_start():
             """启动摄像头"""
-            if self.camera.is_running:
-                return jsonify({"success": True, "message": "摄像头已在运行"})
-
             try:
                 data = request.get_json(silent=True) or {}
             except Exception:
                 data = {}
-            
+
+            camera_index = data.get('camera_index', 0)
+            print(f"[摄像头启动] 请求参数：{data}, 当前运行状态：{self.camera.is_running}")
+
+            # 如果摄像头已在运行，检查是否需要切换摄像头
+            if self.camera.is_running:
+                # 如果索引相同，直接返回
+                if data.get('camera_index') is None:
+                    return jsonify({"success": True, "message": "摄像头已在运行"})
+                # 如果索引不同，先停止再重启
+                print(f"[摄像头启动] 检测到索引变化，停止当前摄像头...")
+                self.camera.stop()
+
             config = CameraConfig(
-                camera_index=data.get('camera_index', 0),
+                camera_index=camera_index,
                 width=data.get('width', 1920),
                 height=data.get('height', 1080)
             )
 
+            print(f"[摄像头启动] 使用配置：index={camera_index}, {config.width}x{config.height}")
             if self.camera.start(config):
                 return jsonify({"success": True, "message": "摄像头启动成功"})
             else:
@@ -310,6 +433,40 @@ class BackendServer:
             return jsonify({
                 "count": len(images),
                 "images": images[:100]  # 限制返回数量
+            })
+
+        # ===== 摄像头设备列表 =====
+        @self.app.route('/camera/devices', methods=['GET'])
+        def camera_devices():
+            """获取可用摄像头设备列表"""
+            import cv2
+            devices = []
+
+            # 尝试打开前 10 个可能的摄像头索引
+            for index in range(10):
+                cap = cv2.VideoCapture(index)
+                if cap.isOpened():
+                    # 读取摄像头名称（部分系统支持）
+                    ret, frame = cap.read()
+                    if ret:
+                        devices.append({
+                            "index": index,
+                            "name": f"摄像头 {index}",
+                            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        })
+                    cap.release()
+                    # 等待摄像头资源释放
+                    import time
+                    time.sleep(0.3)
+                else:
+                    # 如果索引 0 都打不开，后面的大概率也没有
+                    if index == 0:
+                        break
+
+            return jsonify({
+                "count": len(devices),
+                "devices": devices
             })
 
         # ===== 视频流 =====
@@ -374,6 +531,132 @@ class BackendServer:
             history = self.ai_service.get_history(limit)
             return jsonify({"success": True, "count": len(history), "history": history})
 
+        # ===== 人脸识别 =====
+        @self.app.route('/face/register', methods=['POST'])
+        def face_register():
+            """注册人脸"""
+            data = request.get_json() or {}
+            image_path = data.get('path')
+            face_id = data.get('face_id')
+            name = data.get('name')
+            face_index = data.get('face_index', 0)
+
+            if not image_path:
+                return jsonify({"success": False, "error": "未提供图像路径"}), 400
+            if not face_id:
+                return jsonify({"success": False, "error": "未提供人脸 ID"}), 400
+
+            result = self.face_service.register_face(Path(image_path), face_id, name, face_index)
+            return jsonify(result)
+
+        @self.app.route('/face/recognize', methods=['POST'])
+        def face_recognize():
+            """识别人脸"""
+            data = request.get_json() or {}
+            image_path = data.get('path')
+
+            if not image_path:
+                return jsonify({"success": False, "error": "未提供图像路径"}), 400
+
+            result = self.face_service.recognize_faces(Path(image_path))
+            return jsonify(result)
+
+        @self.app.route('/face/compare', methods=['POST'])
+        def face_compare():
+            """比对两张图片中的人脸"""
+            data = request.get_json() or {}
+            image_path1 = data.get('path1')
+            image_path2 = data.get('path2')
+
+            if not image_path1 or not image_path2:
+                return jsonify({"success": False, "error": "未提供图像路径"}), 400
+
+            result = self.face_service.compare_faces(Path(image_path1), Path(image_path2))
+            return jsonify(result)
+
+        @self.app.route('/face/list', methods=['GET'])
+        def face_list():
+            """获取已注册人脸列表"""
+            faces = self.face_service.get_face_list()
+            return jsonify({
+                "success": True,
+                "count": len(faces),
+                "faces": faces
+            })
+
+        @self.app.route('/face/delete', methods=['POST'])
+        def face_delete():
+            """删除人脸"""
+            data = request.get_json() or {}
+            face_id = data.get('face_id')
+
+            if not face_id:
+                return jsonify({"success": False, "error": "未提供人脸 ID"}), 400
+
+            if self.face_service.delete_face(face_id):
+                return jsonify({"success": True, "message": f"已删除人脸：{face_id}"})
+            else:
+                return jsonify({"success": False, "error": "人脸不存在或删除失败"}), 404
+
+        @self.app.route('/face/clear', methods=['POST'])
+        def face_clear():
+            """清空所有人脸"""
+            if self.face_service.clear_all_faces():
+                return jsonify({"success": True, "message": "已清空所有人脸"})
+            else:
+                return jsonify({"success": False, "error": "清空失败"}), 500
+
+        @self.app.route('/face/update_name', methods=['POST'])
+        def face_update_name():
+            """更新人脸名称"""
+            data = request.get_json() or {}
+            face_id = data.get('face_id')
+            new_name = data.get('name')
+
+            if not face_id or not new_name:
+                return jsonify({"success": False, "error": "未提供人脸 ID 或新名称"}), 400
+
+            if self.face_service.update_face_name(face_id, new_name):
+                return jsonify({"success": True, "message": f"已更新人脸名称：{new_name}"})
+            else:
+                return jsonify({"success": False, "error": "人脸不存在或更新失败"}), 404
+
+        @self.app.route('/face/capture_register', methods=['POST'])
+        def face_capture_register():
+            """拍照并注册人脸"""
+            data = request.get_json(silent=True) or {}
+            face_id = data.get('face_id')
+            name = data.get('name')
+            face_index = data.get('face_index', 0)
+
+            if not face_id:
+                return jsonify({"success": False, "error": "未提供人脸 ID"}), 400
+
+            # 拍照
+            file_path = self.camera.capture_photo()
+            if not file_path:
+                return jsonify({"success": False, "error": "拍照失败"}), 500
+
+            # 注册人脸
+            result = self.face_service.register_face(file_path, face_id, name, face_index)
+            if result.get("success"):
+                result["image_url"] = f"/files/{file_path.parent.name}/{file_path.name}"
+            return jsonify(result)
+
+        @self.app.route('/face/capture_recognize', methods=['POST'])
+        def face_capture_recognize():
+            """拍照并识别人脸"""
+            # 拍照
+            file_path = self.camera.capture_photo()
+            if not file_path:
+                return jsonify({"success": False, "error": "拍照失败"}), 500
+
+            # 识别人脸
+            result = self.face_service.recognize_faces(file_path)
+            if result.get("success"):
+                result["image_url"] = f"/files/{file_path.parent.name}/{file_path.name}"
+            return jsonify(result)
+
         # ===== 文件服务 =====
         @self.app.route('/files/<date>/<filename>')
         def serve_image(date, filename):
@@ -406,7 +689,8 @@ class BackendServer:
                         "停止": "POST /camera/stop",
                         "状态": "GET /camera/status",
                         "拍照": "POST /camera/capture",
-                        "列表": "GET /camera/list"
+                        "列表": "GET /camera/list",
+                        "设备列表": "GET /camera/devices"
                     },
                     "视频预览": {
                         "预览页面": "/preview",
@@ -416,6 +700,17 @@ class BackendServer:
                         "分析图像": "POST /analyze/image",
                         "获取结果": "GET /analyze/results/<id>",
                         "历史记录": "GET /analyze/history"
+                    },
+                    "人脸识别": {
+                        "注册人脸": "POST /face/register",
+                        "识别人脸": "POST /face/recognize",
+                        "人脸比对": "POST /face/compare",
+                        "人脸列表": "GET /face/list",
+                        "删除人脸": "POST /face/delete",
+                        "清空人脸": "POST /face/clear",
+                        "更新名称": "POST /face/update_name",
+                        "拍照注册": "POST /face/capture_register",
+                        "拍照识别": "POST /face/capture_recognize"
                     },
                     "文件服务": {
                         "获取文件": "GET /files/<date>/<filename>",
