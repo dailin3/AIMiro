@@ -43,6 +43,9 @@ class FaceRecognitionConfig:
     data_dir: str = "./data/faces"
     detection_model: str = "dnn"  # 检测模型：dnn (深度学习) 或 haar (Haar 级联)
     detection_model_path: Optional[str] = None  # DNN 人脸检测模型路径（如 YuNet ONNX）
+    dnn_score_threshold: float = 0.3  # DNN 检测分数阈值
+    dnn_nms_threshold: float = 0.3  # DNN NMS 阈值
+    dnn_top_k: int = 5000  # DNN 候选框上限
     recognition_model: str = "mobilenet"  # 识别模型：mobilenet（ONNX 特征模型）
     mobilenet_model_path: Optional[str] = "./models/mobilenetv2-7.onnx"  # MobileNet ONNX 模型路径
     confidence_threshold: float = 0.5  # 检测置信度阈值
@@ -52,9 +55,19 @@ class FaceRecognitionConfig:
 class FaceDetector:
     """人脸检测器"""
     
-    def __init__(self, model_type: str = "dnn", model_path: Optional[str] = None):
+    def __init__(
+        self,
+        model_type: str = "dnn",
+        model_path: Optional[str] = None,
+        score_threshold: float = 0.3,
+        nms_threshold: float = 0.3,
+        top_k: int = 5000,
+    ):
         self.model_type = model_type
         self.model_path = model_path
+        self.score_threshold = score_threshold
+        self.nms_threshold = nms_threshold
+        self.top_k = top_k
         self.detector = None
         self._init_detector()
     
@@ -85,6 +98,9 @@ class FaceDetector:
                     model=str(model_file),
                     config="",
                     input_size=(320, 320),
+                    score_threshold=float(self.score_threshold),
+                    nms_threshold=float(self.nms_threshold),
+                    top_k=int(self.top_k),
                 )
                 logger.info(f"使用 DNN 人脸检测器：{model_file}")
             except Exception as e:
@@ -121,11 +137,35 @@ class FaceDetector:
             if self.detector is None:
                 return self._detect_haar(image)
 
-            h, w = image.shape[:2]
+            image_u8 = self._to_uint8(image)
+
+            h, w = image_u8.shape[:2]
             self.detector.setInputSize((w, h))
 
-            detect_result = self.detector.detect(image)
+            detect_result = self.detector.detect(image_u8)
             results = self._parse_dnn_result(detect_result)
+
+            if not results:
+                # 对小脸和低分辨率样本做一次放大重试
+                scale = 1.5
+                upscaled = cv2.resize(image_u8, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+                h2, w2 = upscaled.shape[:2]
+                self.detector.setInputSize((w2, h2))
+                detect_result_2 = self.detector.detect(upscaled)
+                results_2 = self._parse_dnn_result(detect_result_2)
+                if results_2:
+                    mapped: List[FaceDetection] = []
+                    for x, y, fw, fh, conf in results_2:
+                        mapped.append(
+                            (
+                                int(x / scale),
+                                int(y / scale),
+                                int(fw / scale),
+                                int(fh / scale),
+                                conf,
+                            )
+                        )
+                    results = mapped
 
             logger.info(f"DNN 检测到 {len(results)} 张人脸")
             return results
@@ -403,6 +443,9 @@ class FaceRecognizerService:
         self.detector = FaceDetector(
             model_type=self.config.detection_model,
             model_path=self.config.detection_model_path,
+            score_threshold=self.config.dnn_score_threshold,
+            nms_threshold=self.config.dnn_nms_threshold,
+            top_k=self.config.dnn_top_k,
         )
         self.recognizer = FaceRecognizer(
             model_type=self.config.recognition_model,

@@ -19,8 +19,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.face_recognition_module import FaceRecognitionConfig, FaceRecognizerService
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-TEST_DATA_ROOT = PROJECT_ROOT / "test_data"
-EXPECTED_PERSON_COUNT = 3
+HUMAN_ROOT = PROJECT_ROOT / "test_data" / "human"
+EXPECTED_PERSON_NAMES = {"jiang", "rabbit", "xuefen"}
+DNN_MODEL_PATH = PROJECT_ROOT / "models" / "face_detection_yunet_2023mar.onnx"
 
 
 def _collect_person_images(root: Path) -> Dict[str, List[Path]]:
@@ -28,15 +29,15 @@ def _collect_person_images(root: Path) -> Dict[str, List[Path]]:
         pytest.skip(f"未找到测试数据目录: {root}")
 
     person_dirs = sorted([p for p in root.iterdir() if p.is_dir()])
-    assert len(person_dirs) == EXPECTED_PERSON_COUNT, (
-        f"期望 {EXPECTED_PERSON_COUNT} 个人员目录，实际是 {len(person_dirs)} 个: "
-        f"{[p.name for p in person_dirs]}"
+    person_names = {p.name for p in person_dirs}
+    assert person_names == EXPECTED_PERSON_NAMES, (
+        f"期望人员目录 {sorted(EXPECTED_PERSON_NAMES)}，实际是 {sorted(person_names)}"
     )
 
     mapping: Dict[str, List[Path]] = {}
     for person_dir in person_dirs:
         images = sorted([p for p in person_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS])
-        assert len(images) >= 2, f"人员目录 {person_dir} 至少需要 2 张人脸图"
+        assert len(images) >= 3, f"人员目录 {person_dir} 至少需要 3 张人脸图（前2张建模，后续用于验证）"
         mapping[person_dir.name] = images
 
     return mapping
@@ -60,27 +61,46 @@ def _extract_encoding(service: FaceRecognizerService, image_path: Path) -> np.nd
 
 
 def test_same_person_faces_should_be_similar() -> None:
-    people = _collect_person_images(TEST_DATA_ROOT)
+    people = _collect_person_images(HUMAN_ROOT)
+    assert DNN_MODEL_PATH.exists(), f"未找到 DNN 模型文件: {DNN_MODEL_PATH}"
+
+    log_dir = PROJECT_ROOT / "test_data" / "tmp_data" / "same_person"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "similarity_log.txt"
 
     config = FaceRecognitionConfig(
-        data_dir="./data/tmp_faces_test_same",
-        detection_model="haar",
-        recognition_threshold=0.6,
+        data_dir=str(log_dir),
+        detection_model="dnn",
+        detection_model_path=str(DNN_MODEL_PATH),
+        recognition_threshold=0.8,
     )
     service = FaceRecognizerService(config=config)
 
+    mismatches: List[str] = []
+    log_lines: List[str] = []
+
     for person_name, image_paths in people.items():
-        encodings = [_extract_encoding(service, p) for p in image_paths]
+        # 使用前 2 张图构建该人的平均原型 embedding
+        base_encodings = [_extract_encoding(service, p) for p in image_paths[:2]]
+        prototype = np.mean(np.vstack(base_encodings), axis=0)
+        norm = np.linalg.norm(prototype)
+        if norm > 0:
+            prototype = prototype / norm
 
-        pair_results = []
-        for enc1, enc2 in itertools.combinations(encodings, 2):
-            is_match, similarity = service.compare_faces(enc1, enc2)
-            pair_results.append((is_match, similarity))
+        base_image_names = f"{image_paths[0].name} + {image_paths[1].name}"
+        log_lines.append(f"[{person_name}] base={base_image_names}")
 
-        assert pair_results, f"人员 {person_name} 没有可比较的图像对"
+        # 用后续图片逐张验证是否与原型一致
+        for image_path in image_paths[2:]:
+            query_encoding = _extract_encoding(service, image_path)
+            is_match, similarity = service.compare_faces(prototype, query_encoding)
+            log_lines.append(
+                f"[{person_name}] query={image_path.name} base={base_image_names} similarity={similarity:.4f} match={is_match}"
+            )
+            if not is_match:
+                mismatches.append(
+                    f"{person_name}: {image_path.name} vs [{base_image_names}] 不一致（similarity={similarity:.4f}）"
+                )
 
-        not_matched = [sim for matched, sim in pair_results if not matched]
-        assert not not_matched, (
-            f"人员 {person_name} 存在同人不匹配样本，"
-            f"相似度: {[round(v, 4) for v in not_matched]}"
-        )
+    log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    assert not mismatches, f"同人一致性失败: {mismatches}"
