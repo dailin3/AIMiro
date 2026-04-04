@@ -75,12 +75,21 @@ def test_dnn_positive_human_images_should_detect_face() -> None:
     service = _create_dnn_service("dnn_positive")
     person_images = _collect_human_images(HUMAN_ROOT)
 
+    log_dir = TMP_DATA_ROOT / "dnn_positive"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "detection_log.txt"
+    log_lines: List[str] = []
+
     failed: List[str] = []
     for person_name, image_paths in person_images.items():
         for image_path in image_paths:
-            if not _has_face_detection(service, image_path):
+            has_detection = _has_face_detection(service, image_path)
+            relative_path = str(image_path.relative_to(TEST_DATA_ROOT))
+            log_lines.append(f"[POSITIVE] {relative_path} detected={has_detection}")
+            if not has_detection:
                 failed.append(str(image_path.relative_to(PROJECT_ROOT)))
 
+    log_file.write_text("\n".join(log_lines) + "\n")
     assert not failed, f"正向测试失败：以下 human 图片未检测到人脸: {failed}"
 
 
@@ -89,9 +98,18 @@ def test_dnn_negative_nothuman_images_should_not_detect_face() -> None:
     service = _create_dnn_service("dnn_negative")
     image_paths = _collect_nothuman_images(NOTHUMAN_ROOT)
 
+    log_dir = TMP_DATA_ROOT / "dnn_negative"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "detection_log.txt"
+    log_lines: List[str] = []
+
     failed: List[str] = []
     for image_path in image_paths:
-        if _has_face_detection(service, image_path):
+        has_detection = _has_face_detection(service, image_path)
+        relative_path = str(image_path.relative_to(TEST_DATA_ROOT))
+        log_lines.append(f"[NEGATIVE] {relative_path} detected={has_detection}")
+        if has_detection:
             failed.append(str(image_path.relative_to(PROJECT_ROOT)))
 
+    log_file.write_text("\n".join(log_lines) + "\n")
     assert not failed, f"反向测试失败：以下 nothuman 图片误检测到人脸: {failed}"
