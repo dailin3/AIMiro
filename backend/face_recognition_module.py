@@ -71,8 +71,13 @@ class FaceRecognitionConfig:
     detection_model: str = "hog"  # 'hog' 或 'cnn' (兼容旧接口: 'dnn' 也接受)
     detection_model_path: str = ""  # 兼容旧接口
     recognition_model: str = "large"  # 'large' 或 'small'
-    recognition_threshold: float = 0.6  # face_recognition 默认阈值
-    number_of_jitters: int = 0
+    recognition_threshold: float = 0.45  # 更严格阈值 (默认 0.6)
+    number_of_jitters: int = 1  # 增加抖动增强以提高特征稳定性
+    # 三级判定阈值
+    threshold_certain: float = 0.40   # < 0.40: 确定匹配
+    threshold_uncertain: float = 0.45 # 0.40-0.45: 不确定，需要二次确认
+    # 是否使用多照片平均特征
+    use_average_encoding: bool = True
 
 
 class FaceRecognizerService:
@@ -224,11 +229,13 @@ class FaceRecognizerService:
             encoding2 = encoding2.flatten()
 
         # 使用 face_recognition.compare_faces (内部使用 face_distance)
-        # tolerance=0.6 是 face_recognition 的推荐值
+        # 注意：测试代码的 recognition_threshold=0.80 是相似度阈值，不是欧氏距离
+        # face_recognition 使用欧氏距离，推荐 tolerance=0.6
+        # 这里硬编码使用 0.6，而不是 self.config.recognition_threshold
         is_match = face_recognition.compare_faces(
             [encoding1], encoding2, tolerance=0.6
         )[0]
-        
+
         # 计算余弦相似度作为相似度分数
         norm1 = np.linalg.norm(encoding1)
         norm2 = np.linalg.norm(encoding2)
@@ -238,6 +245,38 @@ class FaceRecognizerService:
         similarity = max(-1.0, min(1.0, similarity))
 
         return is_match, similarity
+
+    def compare_faces_with_certainty(self, encoding1: np.ndarray, encoding2: np.ndarray) -> Dict[str, Any]:
+        """
+        三级判定比较：确定匹配 / 不确定 / 确定不匹配
+        返回包含 certainty 字段的详细结果
+        """
+        if encoding1 is None or encoding2 is None:
+            return {"is_match": False, "certainty": "none", "distance": float('inf'), "similarity": 0.0}
+
+        if len(encoding1.shape) > 1:
+            encoding1 = encoding1.flatten()
+        if len(encoding2.shape) > 1:
+            encoding2 = encoding2.flatten()
+
+        # 计算欧氏距离
+        distance = float(np.linalg.norm(encoding1 - encoding2))
+
+        # 计算余弦相似度
+        norm1 = np.linalg.norm(encoding1)
+        norm2 = np.linalg.norm(encoding2)
+        if norm1 == 0 or norm2 == 0:
+            return {"is_match": False, "certainty": "none", "distance": float('inf'), "similarity": 0.0}
+        similarity = float(np.dot(encoding1, encoding2) / (norm1 * norm2))
+        similarity = max(-1.0, min(1.0, similarity))
+
+        # 三级判定
+        if distance < self.config.threshold_certain:
+            return {"is_match": True, "certainty": "certain", "distance": distance, "similarity": similarity}
+        elif distance < self.config.threshold_uncertain:
+            return {"is_match": True, "certainty": "uncertain", "distance": distance, "similarity": similarity}
+        else:
+            return {"is_match": False, "certainty": "no_match", "distance": distance, "similarity": similarity}
 
     def recognize_faces(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """识别图像中的人脸"""
@@ -263,16 +302,22 @@ class FaceRecognizerService:
             unknown_encoding = unknown_encodings[i]
             matches = []
             for face_id, face_info in self.face_database.items():
-                is_match, similarity = self.compare_faces(unknown_encoding, face_info.encoding)
-                if is_match:
-                    matches.append({
-                        "face_id": face_id,
-                        "name": face_info.name,
-                        "similarity": similarity,
-                        "is_match": is_match
-                    })
+                # 使用三级判定
+                result = self.compare_faces_with_certainty(unknown_encoding, face_info.encoding)
+                matches.append({
+                    "face_id": face_id,
+                    "name": face_info.name,
+                    "similarity": result["similarity"],
+                    "distance": result["distance"],
+                    "certainty": result["certainty"],
+                    "is_match": result["is_match"]
+                })
 
+            # 过滤掉确定不匹配的
+            matches = [m for m in matches if m["is_match"]]
+            # 按相似度排序
             matches.sort(key=lambda x: x["similarity"], reverse=True)
+            
             results.append({
                 "location": {"x": detection.x, "y": detection.y, "w": detection.w, "h": detection.h},
                 "matches": matches,
@@ -295,9 +340,48 @@ class FaceRecognizerService:
         if encoding is None:
             return None
 
+        # 如果启用多照片平均，尝试更新已有特征
+        if self.config.use_average_encoding and face_id in self.face_database:
+            # 与已有特征平均
+            existing_encoding = self.face_database[face_id].encoding
+            new_encoding = np.mean([existing_encoding, encoding], axis=0)
+            self.face_database[face_id].encoding = new_encoding
+            self._save_face_database()
+            return self.face_database[face_id]
+
         face_info = FaceInfo(
             face_id=face_id, name=name or face_id, encoding=encoding,
             location=FaceRect(x=detection.x, y=detection.y, w=detection.w, h=detection.h),
+            registered_at=datetime.now().isoformat()
+        )
+        self.face_database[face_id] = face_info
+        self._save_face_database()
+        return face_info
+
+    def batch_register_faces(self, images: List[np.ndarray], face_id: str, 
+                              name: Optional[str] = None) -> Optional[FaceInfo]:
+        """
+        批量注册人脸（使用多张照片平均特征）
+        推荐用于初始化注册，可以显著提高区分度
+        """
+        encodings = []
+        for image in images:
+            face_detections = self.detect_faces(image)
+            if not face_detections:
+                continue
+            detection = face_detections[0]  # 使用第一张检测到的人脸
+            encoding = self.extract_face_encoding(image, detection)
+            if encoding is not None:
+                encodings.append(encoding)
+
+        if not encodings:
+            return None
+
+        # 计算平均特征
+        avg_encoding = np.mean(encodings, axis=0)
+
+        face_info = FaceInfo(
+            face_id=face_id, name=name or face_id, encoding=avg_encoding,
             registered_at=datetime.now().isoformat()
         )
         self.face_database[face_id] = face_info

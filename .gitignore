@@ -144,3 +144,7 @@ models/
 test_data/
 
 tmp_data/
+
+temp/
+
+ai-doc/
