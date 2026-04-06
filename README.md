@@ -53,9 +53,9 @@ miro-demo/
 │   ├── backend_server.py    # Flask API 服务器
 │   ├── camera_capture.py    # 摄像头采集模块
 │   ├── ai_image_analysis.py # AI 图像分析模块
-│   └── face_recognition_module.py  # 人脸识别模块
+│   └── face_recognition_insightface.py  # 人脸识别模块 (InsightFace ArcFace)
 ├── tests/                   # 测试脚本
-│   └── test_face_recognition_smoke.py  # 人脸识别冒烟测试
+│   └── (测试脚本待补充)
 ├── frontend/                # 前端页面
 │   └── preview.html
 ├── data/                    # 数据目录

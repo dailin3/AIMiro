@@ -23,8 +23,9 @@ from backend.camera_capture import CameraCapture, CameraConfig
 # 导入 AI 分析模块
 from backend.ai_image_analysis import AIImageAnalyzer, AnalysisConfig, load_env_file
 
-# 导入人脸识别模块
-from backend.face_recognition_module import FaceRecognizerService, FaceRecognitionConfig
+# 导入人脸识别模块 (使用 InsightFace ArcFace 模型)
+from backend.face_recognition_insightface import FaceRecognizerServiceInsightFace as FaceRecognizerService
+from backend.face_recognition_insightface import FaceRecognitionConfig
 
 # 加载 .env 配置
 load_env_file()
