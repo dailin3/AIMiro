@@ -235,6 +235,26 @@ class FaceRecognizerServiceInsightFace:
             encoding_file.unlink()
         return True
 
+    def get_face_list(self) -> List[Dict[str, Any]]:
+        """获取已注册人脸列表"""
+        return [info.to_dict() for info in self.face_database.values()]
+
+    def delete_face(self, face_id: str) -> bool:
+        """删除指定人脸"""
+        if face_id not in self.face_database:
+            return False
+        del self.face_database[face_id]
+        self._save_face_database()
+        return True
+
+    def update_face_name(self, face_id: str, new_name: str) -> bool:
+        """更新人脸名称"""
+        if face_id not in self.face_database:
+            return False
+        self.face_database[face_id].name = new_name
+        self._save_face_database()
+        return True
+
 
 def test_insightface():
     """测试 insightface 效果"""
