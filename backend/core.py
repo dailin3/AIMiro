@@ -275,6 +275,15 @@ class CoreScheduler:
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误次数上限
 
+        # 摄像头预热：等待 2 秒让摄像头稳定
+        logger.info("摄像头预热中（2 秒）...")
+        time.sleep(2)
+        # 清空缓冲区
+        if self._camera:
+            for _ in range(5):
+                self._camera.read()
+        logger.info("摄像头预热完成")
+
         while self._running:
             try:
                 if self._camera is None or not self._camera.isOpened():
@@ -292,7 +301,13 @@ class CoreScheduler:
                     consecutive_errors = 0  # 重置错误计数
                 else:
                     consecutive_errors += 1
-                    logger.warning(f"读取帧失败 ({consecutive_errors}/{max_consecutive_errors})")
+                    if consecutive_errors <= 3:
+                        logger.debug(f"读取帧失败 ({consecutive_errors}/{max_consecutive_errors})")
+                    elif consecutive_errors == 4:
+                        logger.warning(f"连续读取帧失败，可能摄像头有问题 ({consecutive_errors}/{max_consecutive_errors})")
+                    else:
+                        logger.warning(f"读取帧失败 ({consecutive_errors}/{max_consecutive_errors})")
+                    
                     if consecutive_errors >= max_consecutive_errors:
                         logger.error("连续读取失败次数过多，标记为 ERROR 状态")
                         self._set_state(CameraState.ERROR)
