@@ -8,10 +8,16 @@ dependencies = [
   "flask>=3.0.0",
   "flask-cors>=4.0.0",
   "numpy>=1.26.0",
-  "opencv-python-headless>=4.10.0.84",
   "requests>=2.33.0",
   "python-dotenv>=1.0.1",
+  # OpenCV: macOS/Windows/Linux x86_64/aarch64 使用官方 wheel
+  # Linux ARMv6 (树莓派 Zero/1) 需要手动安装系统包: sudo apt install python3-opencv
+  "opencv-python-headless>=4.10.0.84; platform_machine != 'armv6l'",
 ]
+
+[tool.uv]
+# 如果需要在 ARMv6 上开发，取消注释下面这行
+# required-environments = ["sys_platform == 'linux' and platform_machine == 'armv6l'"]
 
 [dependency-groups]
 dev = [
