@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  miro-core:
+    build: .
+    container_name: miro-core
+    ports:
+      - "8080:8080"
+    environment:
+      - CAMERA_INDEX=0
+      - CAMERA_WIDTH=1920
+      - CAMERA_HEIGHT=1080
+      - SERVER_PORT=8080
+      - TEMP_MAX_AGE_HOURS=24
+      - DATA_DIR=/app/data
+      - TEMP_DIR=/app/data/temp
+    volumes:
+      - ./data:/app/data
+    devices:
+      - /dev/video0:/dev/video0  # USB 摄像头
+      # 如果是 CSI 摄像头，需要:
+      # - /dev/video0:/dev/video0
+    restart: unless-stopped
