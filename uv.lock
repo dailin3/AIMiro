@@ -560,8 +560,8 @@ source = { virtual = "." }
 dependencies = [
     { name = "flask" },
     { name = "flask-cors" },
-    { name = "numpy" },
-    { name = "opencv-python-headless" },
+    { name = "numpy", marker = "platform_machine != 'armv6l'" },
+    { name = "opencv-python-headless", marker = "platform_machine != 'armv6l'" },
     { name = "python-dotenv" },
     { name = "requests" },
 ]
@@ -580,8 +580,8 @@ dev = [
 requires-dist = [
     { name = "flask", specifier = ">=3.0.0" },
     { name = "flask-cors", specifier = ">=4.0.0" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
+    { name = "numpy", marker = "platform_machine != 'armv6l'", specifier = ">=1.26.0" },
+    { name = "opencv-python-headless", marker = "platform_machine != 'armv6l'", specifier = ">=4.10.0.84" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "requests", specifier = ">=2.33.0" },
 ]
